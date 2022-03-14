@@ -1,0 +1,15 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+accounts = { path = "../accounts" }
+argh = "0.1.7"
+tokio = { version = "1.17.0", features = ["rt-multi-thread", "macros"] }
+hashring = "0.3.0"
+tracing = "0.1.32"
+tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
+tracing-tree = "0.2.0"
+serde = { version = "1.0.136", features = ["derive"] }
+csv = "1.1.6"

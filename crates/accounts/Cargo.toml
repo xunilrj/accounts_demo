@@ -1,0 +1,20 @@
+[package]
+name = "accounts"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rust_decimal = "1.22.0"
+rust_decimal_macros = "1.22"
+tokio = { version = "1.17.0", features = ["rt", "sync", "time"] }
+flume = "0.10.11"
+paste = "1.0"
+hashring = "0.3.0"
+tracing = "0.1.32"
+tracing-tree = "0.2.0"
+async-trait = "0.1.52"
+tracing-subscriber = "0.3.9"
+
+[dev-dependencies]
+quickcheck = "1.0.3"
+quickcheck_macros = "1.0.0"
