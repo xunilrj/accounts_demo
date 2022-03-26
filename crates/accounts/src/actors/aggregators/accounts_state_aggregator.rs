@@ -29,6 +29,7 @@ impl Aggregator for AccountsStateAggregator {
                 account_id,
                 amount,
                 held,
+                locked,
                 ..
             } => {
                 let state = self
@@ -42,6 +43,7 @@ impl Aggregator for AccountsStateAggregator {
                         locked: false,
                     });
 
+                state.locked = locked;
                 state.available = amount;
                 state.held = held;
                 state.total = state.available + state.held;

@@ -83,7 +83,7 @@ pub async fn process(shard: AccountShardClient, input: String) {
 
     let mut tasks = vec![];
     for result in reader.deserialize() {
-        let record: CsvRecord = result.unwrap();
+        let record: CsvRecord = result.unwrap(); //TODO unwrap
 
         let shard = shard.clone();
 

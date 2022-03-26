@@ -123,6 +123,7 @@ impl AccountRequests {
     }
 }
 
+#[derive(Debug)]
 enum Disputes {
     Dispute(DisputeRequest, Sender<AccountResponses>),
     Resolve(ResolveRequest, Sender<AccountResponses>),
@@ -323,24 +324,44 @@ impl AccountActor {
             };
 
             let _ = callback.send_async(response).await;
+        }
 
-            // Now run all known disputes into this transaction
-            if let Some(disputes) = self.disputes.remove(&transaction_id) {
-                for dispute in disputes {
-                    match dispute {
-                        Disputes::Dispute(r, callback) => {
-                            let r = self.handle_dispute(transaction_id, r);
-                            let _ = callback.send_async(r.into()).await;
-                        }
-                        Disputes::Resolve(r, callback) => {
-                            let r = self.handle_resolve(transaction_id, r);
-                            let _ = callback.send_async(r.into()).await;
-                        }
-                        Disputes::Chargeback(r, callback) => {
-                            let r = self.handle_chargeback(transaction_id, r);
-                            let _ = callback.send_async(r.into()).await;
-                        }
+        // Now run all known disputes into this transaction
+        // disputes here can be out of order, so...
+        let disputes = match self.disputes.iter().next().map(|x| *x.0) {
+            None => return,
+            Some(key) => self.disputes.remove(&key),
+        };
+
+        if let Some(disputes) = disputes {
+            // we first accept disputes...
+            for dispute in disputes.iter() {
+                match dispute {
+                    Disputes::Dispute(r, callback) => {
+                        let r = self.handle_dispute(r.transaction_id, r.clone());
+                        let _ = callback.send_async(r.into()).await;
                     }
+                    _ => {}
+                }
+            }
+
+            // then we solve them.
+            for dispute in disputes {
+                match dispute {
+                    Disputes::Resolve(r, callback) => {
+                        let r = self.handle_resolve(r.transaction_id, r);
+                        let _ = callback.send_async(r.into()).await;
+                    }
+                    // If the chargeback arrives before the real operation
+                    // we have a problem. This will lock the account and all
+                    // subsequent operations will fail.
+                    // On real life this would never happen, because the operation,
+                    // the dispute and the carhgeback would need to happen in 100ms or less.
+                    Disputes::Chargeback(r, callback) => {
+                        let r = self.handle_chargeback(r.transaction_id, r);
+                        let _ = callback.send_async(r.into()).await;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -349,6 +370,19 @@ impl AccountActor {
     fn add_dispute(&mut self, transaction_id: u32, dispute: Disputes) {
         let disputes = self.disputes.entry(transaction_id).or_default();
         disputes.push(dispute);
+
+        let sender = self.sender.clone();
+        tokio::task::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await; //TODO magic number
+            let (callback_sender, callback_recv) = flume::bounded(1);
+            let _ = sender
+                .send_async(CommandEnvelope {
+                    payload: AccountRequests::AcceptRequestRequest(Accept),
+                    callback: callback_sender,
+                })
+                .await;
+            let _ = callback_recv.recv_async().await;
+        });
     }
 }
 

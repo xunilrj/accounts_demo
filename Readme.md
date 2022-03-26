@@ -65,3 +65,28 @@ Process out of order is very complex. If we are aiming for 100% we can implement
 Problems are:
 1 - If we need to have a "current view" of the system. We may be seeing a problematic view, that will *eventually* be corrected;
 2 - Is almost impossible to persist the whole history forever. We will need to "checkpoint" the state as some point. This will put a limit on how late a command can arrive.
+
+There is one specific test to test out or order. Real system would need much more, of course.
+## Example of Out of Order
+
+### Chargeback before Dispute
+
+..
+ChargebackRequest(ChargebackRequest { account_id: 1, transaction_id: 1 })
+DisputeRequest(DisputeRequest { account_id: 1, transaction_id: 1 })
+..
+client,available,held,total,locked
+1,0,0,0,true
+2,2,0,2,false
+
+In this example the Chargeback arrives before Dispute.
+
+###  Withdraw before Deposit
+
+...
+WithdrawRequest(WithdrawRequest { account_id: 2, transaction_id: 5, amount: Money { amount: 3, currency: Bitcoin } })
+DepositRequest(DepositRequest { account_id: 2, transaction_id: 2, amount: Money { amount: 2, currency: Bitcoin } })
+...
+client,available,held,total,locked
+1,0,0,0,true
+2,2,0,2,false
