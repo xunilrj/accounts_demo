@@ -72,6 +72,7 @@ impl Account {
         match self.ammounts.get(&transaction_id) {
             Some(amount) => match self.amount.checked_sub(*amount * self.amount.currency) {
                 Ok(amount) => {
+                    self.amount = amount;
                     self.in_dispute.insert(transaction_id);
                     self.raise_account_updated(&mut events, transaction_id);
                     AccountDomainResult::Ok { data: (), events }
@@ -79,6 +80,26 @@ impl Account {
                 Err(err) => AccountDomainResult::Err(AccountErrors::MoneyErrors(err)),
             },
             None => AccountDomainResult::Err(AccountErrors::TransactionNotFound),
+        }
+    }
+
+    pub fn resolve(&mut self, transaction_id: u32) -> AccountDomainResult<()> {
+        let mut events = vec![];
+
+        if !self.in_dispute.remove(&transaction_id) {
+            AccountDomainResult::Err(AccountErrors::TransactionNotFound)
+        } else {
+            match self.ammounts.get(&transaction_id) {
+                Some(amount) => match self.amount.checked_add(*amount * self.amount.currency) {
+                    Ok(amount) => {
+                        self.amount = amount;
+                        self.raise_account_updated(&mut events, transaction_id);
+                        AccountDomainResult::Ok { data: (), events }
+                    }
+                    Err(err) => AccountDomainResult::Err(AccountErrors::MoneyErrors(err)),
+                },
+                None => AccountDomainResult::Err(AccountErrors::TransactionNotFound),
+            }
         }
     }
 
@@ -139,15 +160,18 @@ mod tests {
             .expect_err("Cannot withdraw more than was deposit (if only! :P)");
     }
 
-    #[quickcheck]
-    fn ok_deposit_dispute(values: BigSmall<u64>) -> bool {
+    #[test]
+    fn ok_deposit_dispute_resolve() {
         let mut account = Account::new(0);
 
-        account.deposit(0, values.big * Bitcoin).unwrap();
-        assert!(!account.amount.is_zero());
+        account.deposit(0, 1 * Bitcoin).unwrap();
+        assert!(account.amount.as_decimal() == Decimal::ONE);
 
         account.dispute(0);
-        account.amount.is_zero()
+        assert!(account.amount.is_zero());
+
+        account.resolve(0);
+        assert!(account.amount.as_decimal() == Decimal::ONE);
     }
 
     //TODO test events

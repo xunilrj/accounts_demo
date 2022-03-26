@@ -1,5 +1,5 @@
 use accounts::actors::{
-    account::{DepositRequest, DisputeRequest, WithdrawRequest},
+    account::{DepositRequest, DisputeRequest, ResolveRequest, WithdrawRequest},
     account_shard::AccountShardClient,
 };
 use csv::{ReaderBuilder, Trim};
@@ -54,6 +54,14 @@ pub async fn process(shard: AccountShardClient, input: String) {
             "dispute" => {
                 let _ = shard
                     .send_account_async(DisputeRequest {
+                        account_id: client,
+                        transaction_id: tx,
+                    })
+                    .await;
+            }
+            "resolve" => {
+                let _ = shard
+                    .send_account_async(ResolveRequest {
                         account_id: client,
                         transaction_id: tx,
                     })

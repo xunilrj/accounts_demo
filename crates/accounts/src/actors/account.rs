@@ -54,6 +54,18 @@ pub enum DisputeResponse {
     Error(AccountErrors),
 }
 
+#[derive(Debug)]
+pub struct ResolveRequest {
+    pub account_id: u32,
+    pub transaction_id: u32,
+}
+
+#[derive(Debug)]
+pub enum ResolveResponse {
+    Ok,
+    Error(AccountErrors),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Accept;
 
@@ -65,6 +77,7 @@ gen_client_extension_methods! {
         fn deposit(_: DepositRequest) -> DepositResponse;
         fn withdraw(_: WithdrawRequest) -> WithdrawResponse;
         fn dispute(_: DisputeRequest) -> DisputeResponse;
+        fn resolve(_: ResolveRequest) -> ResolveResponse;
         fn accept_request(_: Accept) -> Accept;
     }
 }
@@ -75,6 +88,7 @@ impl AccountRequests {
             AccountRequests::DepositRequest(x) => x.account_id,
             AccountRequests::WithdrawRequest(x) => x.account_id,
             AccountRequests::DisputeRequest(x) => x.account_id,
+            AccountRequests::ResolveRequest(x) => x.account_id,
             AccountRequests::AcceptRequestRequest(_) => {
                 panic!("This message does not have account_id.")
             }
@@ -86,6 +100,7 @@ impl AccountRequests {
             AccountRequests::DepositRequest(x) => x.transaction_id,
             AccountRequests::WithdrawRequest(x) => x.transaction_id,
             AccountRequests::DisputeRequest(x) => x.transaction_id,
+            AccountRequests::ResolveRequest(x) => x.transaction_id,
             AccountRequests::AcceptRequestRequest(_) => {
                 panic!("This message does not have transaction_id.")
             }
