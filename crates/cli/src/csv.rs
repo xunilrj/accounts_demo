@@ -77,12 +77,14 @@ pub async fn process(shard: AccountShardClient, input: String) {
         .delimiter(b',')
         .has_headers(true)
         .trim(Trim::All)
+        .flexible(true)
         .from_path(input)
         .unwrap(); //TODO unwrap
 
     let mut tasks = vec![];
     for result in reader.deserialize() {
         let record: CsvRecord = result.unwrap();
+
         let shard = shard.clone();
 
         let t = tokio::task::spawn(async move {
