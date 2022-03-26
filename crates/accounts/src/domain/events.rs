@@ -7,5 +7,6 @@ pub enum AllEvents {
         transaction_id: u32,
         amount: Decimal,
         held: Decimal,
+        locked: bool,
     },
 }

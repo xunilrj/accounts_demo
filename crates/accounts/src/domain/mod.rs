@@ -53,6 +53,13 @@ where
         }
     }
 
+    pub fn is_err(self) -> bool {
+        match self {
+            DomainResult::Ok { .. } => false,
+            DomainResult::Err(_) => true,
+        }
+    }
+
     pub fn expect_err(self, msg: impl AsRef<str>) -> DomainResult<T, TErr, TEvent> {
         match self {
             DomainResult::Err(err) => DomainResult::Err(err),

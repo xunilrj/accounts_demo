@@ -16,52 +16,64 @@ use crate::{
 
 use super::{Actor, CommandEnvelope};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DepositRequest {
     pub account_id: u32,
     pub transaction_id: u32,
     pub amount: Money,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum DepositResponse {
     Ok,
     Error(AccountErrors),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WithdrawRequest {
     pub account_id: u32,
     pub transaction_id: u32,
     pub amount: Money,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum WithdrawResponse {
     Ok,
     Error(AccountErrors),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DisputeRequest {
     pub account_id: u32,
     pub transaction_id: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum DisputeResponse {
     Ok,
     Error(AccountErrors),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ResolveRequest {
     pub account_id: u32,
     pub transaction_id: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ResolveResponse {
+    Ok,
+    Error(AccountErrors),
+}
+
+#[derive(Clone, Debug)]
+pub struct ChargebackRequest {
+    pub account_id: u32,
+    pub transaction_id: u32,
+}
+
+#[derive(Clone, Debug)]
+pub enum ChargebackResponse {
     Ok,
     Error(AccountErrors),
 }
@@ -78,6 +90,7 @@ gen_client_extension_methods! {
         fn withdraw(_: WithdrawRequest) -> WithdrawResponse;
         fn dispute(_: DisputeRequest) -> DisputeResponse;
         fn resolve(_: ResolveRequest) -> ResolveResponse;
+        fn chargeback(_: ChargebackRequest) -> ChargebackResponse;
         fn accept_request(_: Accept) -> Accept;
     }
 }
@@ -89,6 +102,7 @@ impl AccountRequests {
             AccountRequests::WithdrawRequest(x) => x.account_id,
             AccountRequests::DisputeRequest(x) => x.account_id,
             AccountRequests::ResolveRequest(x) => x.account_id,
+            AccountRequests::ChargebackRequest(x) => x.account_id,
             AccountRequests::AcceptRequestRequest(_) => {
                 panic!("This message does not have account_id.")
             }
@@ -101,6 +115,7 @@ impl AccountRequests {
             AccountRequests::WithdrawRequest(x) => x.transaction_id,
             AccountRequests::DisputeRequest(x) => x.transaction_id,
             AccountRequests::ResolveRequest(x) => x.transaction_id,
+            AccountRequests::ChargebackRequest(x) => x.transaction_id,
             AccountRequests::AcceptRequestRequest(_) => {
                 panic!("This message does not have transaction_id.")
             }
@@ -108,9 +123,16 @@ impl AccountRequests {
     }
 }
 
+enum Disputes {
+    Dispute(DisputeRequest, Sender<AccountResponses>),
+    Resolve(ResolveRequest, Sender<AccountResponses>),
+    Chargeback(ChargebackRequest, Sender<AccountResponses>),
+}
+
 pub struct AccountActor {
     account: Account,
     requests: BTreeMap<u32, (AccountRequests, Sender<AccountResponses>)>,
+    disputes: BTreeMap<u32, Vec<Disputes>>,
     broadcast: Broadcast<AllEvents>,
     sender: flume::Sender<CommandEnvelope<AccountRequests, AccountResponses>>,
 }
@@ -148,10 +170,18 @@ impl Actor<AccountRequests, AccountResponses> for AccountActor {
         request: AccountRequests,
         callback: Sender<AccountResponses>,
     ) {
-        if let AccountRequests::AcceptRequestRequest(_) = request {
-            self.accept_request().await;
-        } else {
-            self.schedule_request(request, callback);
+        use AccountRequests::*;
+        match request {
+            AcceptRequestRequest(_) => self.accept_request().await,
+
+            DepositRequest(_) => self.schedule_request(request, callback),
+            WithdrawRequest(_) => self.schedule_request(request, callback),
+
+            DisputeRequest(r) => self.add_dispute(r.transaction_id, Disputes::Dispute(r, callback)),
+            ResolveRequest(r) => self.add_dispute(r.transaction_id, Disputes::Resolve(r, callback)),
+            ChargebackRequest(r) => {
+                self.add_dispute(r.transaction_id, Disputes::Chargeback(r, callback))
+            }
         }
     }
 }
@@ -164,6 +194,7 @@ impl AccountActor {
             broadcast,
             requests: BTreeMap::new(),
             sender,
+            disputes: BTreeMap::new(),
         }
     }
 
@@ -212,6 +243,36 @@ impl AccountActor {
         }
     }
 
+    #[tracing::instrument(skip(self), ret)]
+    pub fn handle_resolve(
+        &mut self,
+        transaction_id: u32,
+        resolve: ResolveRequest,
+    ) -> ResolveResponse {
+        match self.account.resolve(transaction_id) {
+            DomainResult::Ok { mut events, .. } => {
+                self.broadcast.broadcast_all(events.drain(..));
+                ResolveResponse::Ok
+            }
+            DomainResult::Err(err) => ResolveResponse::Error(err),
+        }
+    }
+
+    #[tracing::instrument(skip(self), ret)]
+    pub fn handle_chargeback(
+        &mut self,
+        transaction_id: u32,
+        chargeback: ChargebackRequest,
+    ) -> ChargebackResponse {
+        match self.account.chargeback(transaction_id) {
+            DomainResult::Ok { mut events, .. } => {
+                self.broadcast.broadcast_all(events.drain(..));
+                ChargebackResponse::Ok
+            }
+            DomainResult::Err(err) => ChargebackResponse::Error(err),
+        }
+    }
+
     // To allow out of order delivery of accounts operations, when a request
     // arrives, we wait 100ms before accepting it.
     // I am not 100% sure of optimize is to one spawn per message here. Tokio
@@ -224,19 +285,21 @@ impl AccountActor {
         callback: Sender<AccountResponses>,
     ) {
         let current_transaction_id = request.get_transaction_id();
-        self.requests
+        let _ = self
+            .requests
             .insert(current_transaction_id, (request, callback));
 
         let sender = self.sender.clone();
         tokio::task::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await; //TODO magic number
-            let (callback, _) = flume::bounded(1);
+            let (callback_sender, callback_recv) = flume::bounded(1);
             let _ = sender
                 .send_async(CommandEnvelope {
                     payload: AccountRequests::AcceptRequestRequest(Accept),
-                    callback,
+                    callback: callback_sender,
                 })
                 .await;
+            let _ = callback_recv.recv_async().await;
         });
     }
 
@@ -252,20 +315,40 @@ impl AccountActor {
 
         if let Some((request, callback)) = item {
             let transaction_id = request.get_transaction_id();
+            use AccountRequests::*;
             let response: AccountResponses = match request {
-                AccountRequests::DepositRequest(deposit) => {
-                    self.handle_deposit(transaction_id, deposit).into()
-                }
-                AccountRequests::WithdrawRequest(withdraw) => {
-                    self.handle_withdraw(transaction_id, withdraw).into()
-                }
-                AccountRequests::DisputeRequest(dispute) => {
-                    self.handle_dispute(transaction_id, dispute).into()
-                }
+                DepositRequest(r) => self.handle_deposit(transaction_id, r).into(),
+                WithdrawRequest(r) => self.handle_withdraw(transaction_id, r).into(),
                 _ => unreachable!("Should never postpone non account operations"),
             };
+
             let _ = callback.send_async(response).await;
+
+            // Now run all known disputes into this transaction
+            if let Some(disputes) = self.disputes.remove(&transaction_id) {
+                for dispute in disputes {
+                    match dispute {
+                        Disputes::Dispute(r, callback) => {
+                            let r = self.handle_dispute(transaction_id, r);
+                            let _ = callback.send_async(r.into()).await;
+                        }
+                        Disputes::Resolve(r, callback) => {
+                            let r = self.handle_resolve(transaction_id, r);
+                            let _ = callback.send_async(r.into()).await;
+                        }
+                        Disputes::Chargeback(r, callback) => {
+                            let r = self.handle_chargeback(transaction_id, r);
+                            let _ = callback.send_async(r.into()).await;
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    fn add_dispute(&mut self, transaction_id: u32, dispute: Disputes) {
+        let disputes = self.disputes.entry(transaction_id).or_default();
+        disputes.push(dispute);
     }
 }
 

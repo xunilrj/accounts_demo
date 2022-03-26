@@ -97,8 +97,15 @@ impl AccountManagerActor {
             .clone();
 
         tokio::task::spawn(async move {
-            let response = account.send_async(request).await.unwrap();
-            let _ = callback.send_async(response.into()).await;
+            match account.send_async(request.clone()).await {
+                Ok(response) => {
+                    let _ = callback.send_async(response.into()).await;
+                }
+                Err(err) => {
+                    tracing::warn!("{:?} {:?}", request, err);
+                    let _ = callback.send_async(AccountManagerResponses::Error(err));
+                }
+            }
         });
     }
 }

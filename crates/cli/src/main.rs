@@ -25,8 +25,6 @@ struct Args {
 
 fn print_accounts_state(state: &AccountsStateAggregator) {
     println!("client,available,held,total,locked");
-    // 1, 1.5, 0.0, 1.5, false
-    // 2, 2.0, 0.0, 2.0, false");
     for AccountState {
         client,
         available,

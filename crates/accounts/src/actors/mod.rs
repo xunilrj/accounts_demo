@@ -25,7 +25,7 @@ macro_rules! gen_client_extension_methods {
         $(fn $fn_name:tt ( $arg_name:tt: $arg_ty:ty ) -> $return_ty:ty; )*
     }) => {
         paste::paste! {
-            #[derive(Debug)]
+            #[derive(Clone, Debug)]
             pub enum [<$trait_name:camel Requests>] {
                 $([<$fn_name:camel Request>] ($arg_ty),)*
             }
@@ -41,9 +41,10 @@ macro_rules! gen_client_extension_methods {
             )*
 
 
-            #[derive(Debug)]
+            #[derive(Clone, Debug)]
             pub enum [<$trait_name:camel Responses>] {
                 $([<$fn_name:camel Response>] ($return_ty),)*
+                Error(String)
             }
 
             unsafe impl Send for [<$trait_name:camel Responses>] {}
@@ -60,22 +61,20 @@ macro_rules! gen_client_extension_methods {
 
             impl $client_name {
                 #[tracing::instrument(skip(self))]
-                pub async fn send_async(&self, payload: [<$trait_name:camel Requests>]) -> Result<[<$trait_name:camel Responses>], ()> {
+                pub async fn send_async(&self, payload: [<$trait_name:camel Requests>]) -> Result<[<$trait_name:camel Responses>], String> {
                     let (callback, receiver) = flume::bounded(1);
                     let envelope = Envelope {
                         payload,
                         callback
                     };
                     let _ = self.0.send_async(envelope).await;
-                    let response = receiver.recv_async().await.map_err(|_| ());
-
-                    response
+                    receiver.recv_async().await.map_err(|err| format!("{:?}", err))
                 }
 
                 $(
                     #[tracing::instrument(skip(self))]
-                    pub fn [<send_ $fn_name:snake _async>](&self, payload: impl Into<$arg_ty> + std::fmt::Debug) -> impl std::future::Future<Output = Result<$return_ty, ()>> {
-                        async fn [<send_ $fn_name:snake _impl>](s: $client_name, payload: impl Into<$arg_ty> + std::fmt::Debug) -> Result<$return_ty, ()> {
+                    pub fn [<send_ $fn_name:snake _async>](&self, payload: impl Into<$arg_ty> + std::fmt::Debug) -> impl std::future::Future<Output = Result<$return_ty, String>> {
+                        async fn [<send_ $fn_name:snake _impl>](s: $client_name, payload: impl Into<$arg_ty> + std::fmt::Debug) -> Result<$return_ty, String> {
                             let payload = payload.into();
 
                             let (callback, receiver) = flume::bounded(1);
@@ -88,7 +87,7 @@ macro_rules! gen_client_extension_methods {
                             let response = receiver.recv_async().await;
                             match response {
                                 Ok([<$trait_name:camel Responses>]::[<$fn_name:camel Response>](x)) => Ok(x),
-                                _ => Err(())
+                                err => Err(format!("{:?}", err))
                             }
                         }
                         [<send_ $fn_name:snake _impl>](self.clone(), payload)

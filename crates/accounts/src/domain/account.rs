@@ -12,6 +12,7 @@ pub struct Account {
     amount: Money,
     ammounts: BTreeMap<u32, Decimal>,
     in_dispute: BTreeSet<u32>,
+    locked: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -19,6 +20,7 @@ pub enum AccountErrors {
     MoneyErrors(MoneyErrors),
     NegativeAmount,
     TransactionNotFound,
+    AccountLocked,
 }
 
 type AccountDomainResult<T> = DomainResult<T, AccountErrors, AllEvents>;
@@ -30,75 +32,108 @@ impl Account {
             amount: Currency::Bitcoin.zero(),
             ammounts: BTreeMap::new(),
             in_dispute: BTreeSet::new(),
+            locked: false,
         }
     }
 
     pub fn deposit(&mut self, transaction_id: u32, amount: Money) -> AccountDomainResult<()> {
-        let mut events = vec![];
+        if self.locked {
+            AccountDomainResult::Err(AccountErrors::AccountLocked)
+        } else {
+            let mut events = vec![];
 
-        match self.amount.checked_add(amount) {
-            Ok(amount) => {
-                self.ammounts.insert(transaction_id, amount.as_decimal());
-                self.amount = amount;
-                self.raise_account_updated(&mut events, transaction_id);
-                AccountDomainResult::Ok { data: (), events }
-            }
-            Err(err) => AccountDomainResult::Err(AccountErrors::MoneyErrors(err)),
-        }
-    }
-
-    pub fn withdraw(&mut self, transaction_id: u32, amount: Money) -> AccountDomainResult<()> {
-        let mut events = vec![];
-
-        match self.amount.checked_sub(amount) {
-            Ok(amount) => {
-                if amount.is_negative() {
-                    AccountDomainResult::Err(AccountErrors::NegativeAmount)
-                } else {
-                    self.ammounts
-                        .insert(transaction_id, amount.as_decimal() * Decimal::NEGATIVE_ONE);
-                    self.amount = amount;
-                    self.raise_account_updated(&mut events, transaction_id);
-                    AccountDomainResult::Ok { data: (), events }
-                }
-            }
-            Err(err) => AccountDomainResult::Err(AccountErrors::MoneyErrors(err)),
-        }
-    }
-
-    pub fn dispute(&mut self, transaction_id: u32) -> AccountDomainResult<()> {
-        let mut events = vec![];
-
-        match self.ammounts.get(&transaction_id) {
-            Some(amount) => match self.amount.checked_sub(*amount * self.amount.currency) {
+            match self.amount.checked_add(amount) {
                 Ok(amount) => {
+                    self.ammounts.insert(transaction_id, amount.as_decimal());
                     self.amount = amount;
-                    self.in_dispute.insert(transaction_id);
                     self.raise_account_updated(&mut events, transaction_id);
                     AccountDomainResult::Ok { data: (), events }
                 }
                 Err(err) => AccountDomainResult::Err(AccountErrors::MoneyErrors(err)),
-            },
-            None => AccountDomainResult::Err(AccountErrors::TransactionNotFound),
+            }
         }
     }
 
-    pub fn resolve(&mut self, transaction_id: u32) -> AccountDomainResult<()> {
-        let mut events = vec![];
-
-        if !self.in_dispute.remove(&transaction_id) {
-            AccountDomainResult::Err(AccountErrors::TransactionNotFound)
+    pub fn withdraw(&mut self, transaction_id: u32, amount: Money) -> AccountDomainResult<()> {
+        if self.locked {
+            AccountDomainResult::Err(AccountErrors::AccountLocked)
         } else {
+            let mut events = vec![];
+
+            match self.amount.checked_sub(amount) {
+                Ok(amount) => {
+                    if amount.is_negative() {
+                        AccountDomainResult::Err(AccountErrors::NegativeAmount)
+                    } else {
+                        self.ammounts
+                            .insert(transaction_id, amount.as_decimal() * Decimal::NEGATIVE_ONE);
+                        self.amount = amount;
+                        self.raise_account_updated(&mut events, transaction_id);
+                        AccountDomainResult::Ok { data: (), events }
+                    }
+                }
+                Err(err) => AccountDomainResult::Err(AccountErrors::MoneyErrors(err)),
+            }
+        }
+    }
+
+    pub fn dispute(&mut self, transaction_id: u32) -> AccountDomainResult<()> {
+        if self.locked {
+            AccountDomainResult::Err(AccountErrors::AccountLocked)
+        } else {
+            let mut events = vec![];
+
             match self.ammounts.get(&transaction_id) {
-                Some(amount) => match self.amount.checked_add(*amount * self.amount.currency) {
+                Some(amount) => match self.amount.checked_sub(*amount * self.amount.currency) {
                     Ok(amount) => {
                         self.amount = amount;
+                        self.in_dispute.insert(transaction_id);
                         self.raise_account_updated(&mut events, transaction_id);
                         AccountDomainResult::Ok { data: (), events }
                     }
                     Err(err) => AccountDomainResult::Err(AccountErrors::MoneyErrors(err)),
                 },
                 None => AccountDomainResult::Err(AccountErrors::TransactionNotFound),
+            }
+        }
+    }
+
+    pub fn resolve(&mut self, transaction_id: u32) -> AccountDomainResult<()> {
+        if self.locked {
+            AccountDomainResult::Err(AccountErrors::AccountLocked)
+        } else {
+            let mut events = vec![];
+
+            if !self.in_dispute.remove(&transaction_id) {
+                AccountDomainResult::Err(AccountErrors::TransactionNotFound)
+            } else {
+                match self.ammounts.get(&transaction_id) {
+                    Some(amount) => match self.amount.checked_add(*amount * self.amount.currency) {
+                        Ok(amount) => {
+                            self.amount = amount;
+                            self.raise_account_updated(&mut events, transaction_id);
+                            AccountDomainResult::Ok { data: (), events }
+                        }
+                        Err(err) => AccountDomainResult::Err(AccountErrors::MoneyErrors(err)),
+                    },
+                    None => AccountDomainResult::Err(AccountErrors::TransactionNotFound),
+                }
+            }
+        }
+    }
+
+    pub fn chargeback(&mut self, transaction_id: u32) -> AccountDomainResult<()> {
+        if self.locked {
+            AccountDomainResult::Err(AccountErrors::AccountLocked)
+        } else {
+            let mut events = vec![];
+
+            if !self.in_dispute.remove(&transaction_id) {
+                AccountDomainResult::Err(AccountErrors::TransactionNotFound)
+            } else {
+                self.locked = true;
+                self.raise_account_updated(&mut events, transaction_id);
+                AccountDomainResult::Ok { data: (), events }
             }
         }
     }
@@ -115,6 +150,7 @@ impl Account {
             transaction_id,
             amount: self.amount.into(),
             held,
+            locked: self.locked,
         });
     }
 }
@@ -172,6 +208,43 @@ mod tests {
 
         account.resolve(0);
         assert!(account.amount.as_decimal() == Decimal::ONE);
+    }
+
+    #[test]
+    fn ok_deposit_dispute_chargeback() {
+        let mut account = Account::new(0);
+
+        account.deposit(0, 1 * Bitcoin).unwrap();
+        assert!(account.amount.as_decimal() == Decimal::ONE);
+
+        account.dispute(0);
+        assert!(account.amount.is_zero());
+
+        account.chargeback(0);
+        assert!(account.amount.is_zero());
+        assert!(account.locked);
+
+        // Locked account. Cannot do anything
+        assert!(matches!(
+            account.deposit(1, 1 * Bitcoin),
+            DomainResult::Err(AccountErrors::AccountLocked)
+        ));
+        assert!(matches!(
+            account.withdraw(1, 1 * Bitcoin),
+            DomainResult::Err(AccountErrors::AccountLocked)
+        ));
+        assert!(matches!(
+            account.dispute(1),
+            DomainResult::Err(AccountErrors::AccountLocked)
+        ));
+        assert!(matches!(
+            account.resolve(1),
+            DomainResult::Err(AccountErrors::AccountLocked)
+        ));
+        assert!(matches!(
+            account.chargeback(1),
+            DomainResult::Err(AccountErrors::AccountLocked)
+        ));
     }
 
     //TODO test events

@@ -38,10 +38,9 @@ impl Actor<AccountShardRequests, AccountShardResponses> for AccountShardActor {
         request: AccountShardRequests,
         callback: Sender<AccountShardResponses>,
     ) {
+        use AccountShardRequests::*;
         match request {
-            AccountShardRequests::AccountRequest(request) => {
-                self.redirect_request(request, callback)
-            }
+            AccountRequest(r) => self.redirect_request(r, callback),
         };
     }
 }
@@ -63,11 +62,18 @@ impl AccountShardActor {
         callback: Sender<AccountShardResponses>,
     ) {
         let account_id = request.get_account_id();
-        let client = self.ring.get(&account_id).cloned().unwrap();
+        let account = self.ring.get(&account_id).cloned().unwrap(); //TODO remove unwrap
 
         tokio::task::spawn(async move {
-            let response = client.send_account_async(request).await.unwrap();
-            let _ = callback.send_async(response.into()).await;
+            match account.send_account_async(request).await {
+                Ok(response) => {
+                    let _ = callback.send_async(response.into()).await;
+                }
+                Err(err) => {
+                    tracing::warn!("{:?}", err);
+                    let _ = callback.send_async(AccountShardResponses::Error(err)).await;
+                }
+            }
         });
     }
 }
