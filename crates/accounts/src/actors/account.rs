@@ -42,6 +42,18 @@ pub enum WithdrawResponse {
     Error(AccountErrors),
 }
 
+#[derive(Debug)]
+pub struct DisputeRequest {
+    pub account_id: u32,
+    pub transaction_id: u32,
+}
+
+#[derive(Debug)]
+pub enum DisputeResponse {
+    Ok,
+    Error(AccountErrors),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Accept;
 
@@ -52,6 +64,7 @@ gen_client_extension_methods! {
     impl Account for AccountClient {
         fn deposit(_: DepositRequest) -> DepositResponse;
         fn withdraw(_: WithdrawRequest) -> WithdrawResponse;
+        fn dispute(_: DisputeRequest) -> DisputeResponse;
         fn accept_request(_: Accept) -> Accept;
     }
 }
@@ -61,6 +74,7 @@ impl AccountRequests {
         match self {
             AccountRequests::DepositRequest(x) => x.account_id,
             AccountRequests::WithdrawRequest(x) => x.account_id,
+            AccountRequests::DisputeRequest(x) => x.account_id,
             AccountRequests::AcceptRequestRequest(_) => {
                 panic!("This message does not have account_id.")
             }
@@ -71,6 +85,7 @@ impl AccountRequests {
         match self {
             AccountRequests::DepositRequest(x) => x.transaction_id,
             AccountRequests::WithdrawRequest(x) => x.transaction_id,
+            AccountRequests::DisputeRequest(x) => x.transaction_id,
             AccountRequests::AcceptRequestRequest(_) => {
                 panic!("This message does not have transaction_id.")
             }
@@ -167,6 +182,21 @@ impl AccountActor {
         }
     }
 
+    #[tracing::instrument(skip(self), ret)]
+    pub fn handle_dispute(
+        &mut self,
+        transaction_id: u32,
+        dispute: DisputeRequest,
+    ) -> DisputeResponse {
+        match self.account.dispute(transaction_id) {
+            DomainResult::Ok { mut events, .. } => {
+                self.broadcast.broadcast_all(events.drain(..));
+                DisputeResponse::Ok
+            }
+            DomainResult::Err(err) => DisputeResponse::Error(err),
+        }
+    }
+
     // To allow out of order delivery of accounts operations, when a request
     // arrives, we wait 100ms before accepting it.
     // I am not 100% sure of optimize is to one spawn per message here. Tokio
@@ -213,6 +243,9 @@ impl AccountActor {
                 }
                 AccountRequests::WithdrawRequest(withdraw) => {
                     self.handle_withdraw(transaction_id, withdraw).into()
+                }
+                AccountRequests::DisputeRequest(dispute) => {
+                    self.handle_dispute(transaction_id, dispute).into()
                 }
                 _ => unreachable!("Should never postpone non account operations"),
             };

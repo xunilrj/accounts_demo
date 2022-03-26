@@ -31,6 +31,17 @@ impl std::ops::Mul<Currency> for f64 {
     }
 }
 
+impl std::ops::Mul<Currency> for Decimal {
+    type Output = Money;
+
+    fn mul(self, rhs: Currency) -> Self::Output {
+        Money {
+            amount: self,
+            currency: rhs,
+        }
+    }
+}
+
 impl Currency {
     pub fn zero(self) -> Money {
         Money {
@@ -42,8 +53,8 @@ impl Currency {
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub struct Money {
-    amount: Decimal,
-    currency: Currency,
+    pub amount: Decimal,
+    pub currency: Currency,
 }
 
 impl From<Money> for rust_decimal::Decimal {
@@ -107,11 +118,27 @@ impl Money {
             })
             .ok_or(MoneyErrors::Underflow)
     }
+
+    pub fn as_decimal(&self) -> Decimal {
+        self.amount
+    }
 }
 
 impl std::cmp::PartialEq<u64> for Money {
     fn eq(&self, other: &u64) -> bool {
         self.amount == Decimal::from_u64(*other).unwrap() //TODO remove unwrap
+    }
+}
+
+impl std::ops::SubAssign<Decimal> for Money {
+    fn sub_assign(&mut self, rhs: Decimal) {
+        self.amount -= rhs;
+    }
+}
+
+impl std::ops::SubAssign<&Decimal> for Money {
+    fn sub_assign(&mut self, rhs: &Decimal) {
+        self.amount -= rhs;
     }
 }
 

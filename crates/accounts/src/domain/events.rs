@@ -6,5 +6,6 @@ pub enum AllEvents {
         account_id: u32,
         transaction_id: u32,
         amount: Decimal,
+        held: Decimal,
     },
 }

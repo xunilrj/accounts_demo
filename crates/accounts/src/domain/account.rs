@@ -1,3 +1,7 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use rust_decimal::Decimal;
+
 use crate::domain::money::{Currency, Money, MoneyErrors};
 
 use super::{events::AllEvents, DomainResult};
@@ -6,12 +10,15 @@ use super::{events::AllEvents, DomainResult};
 pub struct Account {
     id: u32,
     amount: Money,
+    ammounts: BTreeMap<u32, Decimal>,
+    in_dispute: BTreeSet<u32>,
 }
 
 #[derive(Clone, Debug)]
 pub enum AccountErrors {
     MoneyErrors(MoneyErrors),
     NegativeAmount,
+    TransactionNotFound,
 }
 
 type AccountDomainResult<T> = DomainResult<T, AccountErrors, AllEvents>;
@@ -21,6 +28,8 @@ impl Account {
         Self {
             id,
             amount: Currency::Bitcoin.zero(),
+            ammounts: BTreeMap::new(),
+            in_dispute: BTreeSet::new(),
         }
     }
 
@@ -29,6 +38,7 @@ impl Account {
 
         match self.amount.checked_add(amount) {
             Ok(amount) => {
+                self.ammounts.insert(transaction_id, amount.as_decimal());
                 self.amount = amount;
                 self.raise_account_updated(&mut events, transaction_id);
                 AccountDomainResult::Ok { data: (), events }
@@ -45,6 +55,8 @@ impl Account {
                 if amount.is_negative() {
                     AccountDomainResult::Err(AccountErrors::NegativeAmount)
                 } else {
+                    self.ammounts
+                        .insert(transaction_id, amount.as_decimal() * Decimal::NEGATIVE_ONE);
                     self.amount = amount;
                     self.raise_account_updated(&mut events, transaction_id);
                     AccountDomainResult::Ok { data: (), events }
@@ -54,11 +66,34 @@ impl Account {
         }
     }
 
+    pub fn dispute(&mut self, transaction_id: u32) -> AccountDomainResult<()> {
+        let mut events = vec![];
+
+        match self.ammounts.get(&transaction_id) {
+            Some(amount) => match self.amount.checked_sub(*amount * self.amount.currency) {
+                Ok(amount) => {
+                    self.in_dispute.insert(transaction_id);
+                    self.raise_account_updated(&mut events, transaction_id);
+                    AccountDomainResult::Ok { data: (), events }
+                }
+                Err(err) => AccountDomainResult::Err(AccountErrors::MoneyErrors(err)),
+            },
+            None => AccountDomainResult::Err(AccountErrors::TransactionNotFound),
+        }
+    }
+
     fn raise_account_updated(&self, events: &mut Vec<AllEvents>, transaction_id: u32) {
+        let held = self
+            .in_dispute
+            .iter()
+            .filter_map(|x| self.ammounts.get(x))
+            .fold(Decimal::ZERO, |l, r| l + *r);
+
         events.push(AllEvents::AccountUpdated {
             account_id: self.id,
             transaction_id,
             amount: self.amount.into(),
+            held,
         });
     }
 }
@@ -102,6 +137,17 @@ mod tests {
         account
             .withdraw(1, values.big * Bitcoin)
             .expect_err("Cannot withdraw more than was deposit (if only! :P)");
+    }
+
+    #[quickcheck]
+    fn ok_deposit_dispute(values: BigSmall<u64>) -> bool {
+        let mut account = Account::new(0);
+
+        account.deposit(0, values.big * Bitcoin).unwrap();
+        assert!(!account.amount.is_zero());
+
+        account.dispute(0);
+        account.amount.is_zero()
     }
 
     //TODO test events

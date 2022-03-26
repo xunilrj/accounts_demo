@@ -26,7 +26,10 @@ impl Aggregator for AccountsStateAggregator {
     fn handle(&mut self, event: AllEvents) {
         match event {
             AllEvents::AccountUpdated {
-                account_id, amount, ..
+                account_id,
+                amount,
+                held,
+                ..
             } => {
                 let state = self
                     .accounts
@@ -40,7 +43,8 @@ impl Aggregator for AccountsStateAggregator {
                     });
 
                 state.available = amount;
-                state.total = state.available;
+                state.held = held;
+                state.total = state.available + state.held;
             }
         }
     }
